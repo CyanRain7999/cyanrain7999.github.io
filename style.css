@@ -510,4 +510,41 @@ main,
   margin-bottom: 0.5rem;
 }
 
+/* 主站 → 作品资料馆入口小卡片 */
+
+.subtle-portfolio-section {
+  padding-top: 0;
+  padding-bottom: 3rem;
+}
+
+.portfolio-entry-card {
+  margin-top: 1.5rem;
+  border-radius: 1rem;
+  border: 1px dashed rgba(148, 163, 184, 0.55);
+  background: rgba(15, 23, 42, 0.45); /* 和主站整体暗色一致 */
+  padding: 1rem 1.25rem;
+}
+
+.portfolio-entry-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.section-subtitle.small-label {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.section-title.small {
+  font-size: 1.1rem;
+}
+
+.btn-compact {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+}
+
 
