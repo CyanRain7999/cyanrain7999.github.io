@@ -1,4 +1,4 @@
-// particles.js - 拖尾 + 连线 + 更强鼠标排斥版
+// particles.js - 拖尾 + 连线 + 三角面 + 鼠标排斥版
 (() => {
   const canvas = document.getElementById("bg-canvas");
   if (!canvas) return;
@@ -9,7 +9,7 @@
   let width = window.innerWidth;
   let height = window.innerHeight;
 
-  // 粒子数量和交互参数（想调风格就改这里）
+  // 粒子数量和交互参数
   const MAX_PARTICLES_DESKTOP = 80;
   const MAX_PARTICLES_MOBILE = 40;
 
@@ -17,12 +17,19 @@
   const LINK_DISTANCE2 = LINK_DISTANCE * LINK_DISTANCE;
 
   const MOUSE_RADIUS = 220; // 鼠标影响半径
-  const MOUSE_FORCE = 4.2;  // 鼠标排斥强度（越大越狠）
+  const MOUSE_FORCE = 4.2; // 鼠标排斥强度（越大越狠）
+
+  // 三角面的淡入淡出参数（主站背景较暗，适当控制亮度）
+  const FACE_FADE_SPEED = 0.14;
+  const FACE_ALPHA_MIN = 0.06;
+  const FACE_ALPHA_MAX = 0.16;
 
   let particles = [];
+  const faces = new Map(); // "i-j-k" -> { i,j,k,alpha,targetAlpha,baseAlpha,activeThisFrame }
 
   class Particle {
     constructor(w, h) {
+      this.neighbors = [];
       this.reset(w, h, true);
     }
 
@@ -34,7 +41,7 @@
       this.radius = this.baseRadius;
 
       this.speed = 0.18 + Math.random() * 0.5; // 向下飘的速度
-      this.dx = (Math.random() - 0.5) * 0.25;  // 横向轻微漂动
+      this.dx = (Math.random() - 0.5) * 0.25; // 横向轻微漂动
 
       // 冷一点的星星色调
       this.hue = 190 + Math.random() * 40;
@@ -59,7 +66,8 @@
 
         if (dist2 < radius2) {
           const dist = Math.sqrt(dist2) || 0.001;
-          const force = (1 - dist / MOUSE_RADIUS) * MOUSE_FORCE; // 越近越大力
+          const ratio = (MOUSE_RADIUS - dist) / MOUSE_RADIUS;
+          const force = ratio * ratio * MOUSE_FORCE; // 越近越大力
           const nx = dx / dist;
           const ny = dy / dist;
 
@@ -77,7 +85,6 @@
     }
 
     draw(ctx) {
-      // 发光小星星（带辉光）
       const glowRadius = this.radius * 3.1;
 
       const gradient = ctx.createRadialGradient(
@@ -123,12 +130,15 @@
         particles.push(new Particle(width, height));
       }
     }
+
+    // 尺寸变了就清空面，避免索引错乱
+    faces.clear();
   }
 
   const mouse = {
     x: 0,
     y: 0,
-    active: false,
+    active: false
   };
 
   window.addEventListener("pointermove", (e) => {
@@ -145,10 +155,23 @@
 
   let lastTime = 0;
 
-  // 画“星轨连线”
-  function drawConnections() {
+  // 构建连线 + 三角面
+  function buildNetwork() {
     const n = particles.length;
 
+    // 清空邻接
+    for (const p of particles) {
+      p.neighbors.length = 0;
+    }
+
+    const links = [];
+
+    // 先把所有面标记为“本帧未激活”
+    faces.forEach((face) => {
+      face.activeThisFrame = false;
+    });
+
+    // ① 计算连线和邻居
     for (let i = 0; i < n; i++) {
       const p1 = particles[i];
       for (let j = i + 1; j < n; j++) {
@@ -159,18 +182,110 @@
         const dist2 = dx * dx + dy * dy;
 
         if (dist2 < LINK_DISTANCE2) {
-          const t = 1 - dist2 / LINK_DISTANCE2; // 越近 t 越接近 1
+          const t = 1 - dist2 / LINK_DISTANCE2;
           const alpha = 0.15 + 0.35 * t;
 
-          ctx.strokeStyle = `hsla(${(p1.hue + p2.hue) / 2}, 100%, 72%, ${alpha})`;
-          ctx.lineWidth = 0.7 * t;
+          links.push({ i, j, alpha });
 
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
+          p1.neighbors.push(j);
+          p2.neighbors.push(i);
         }
       }
+    }
+
+    // ② 从邻居关系中找三角形面（i-j-k 互相在 LINK_DISTANCE 内）
+    for (let i = 0; i < n; i++) {
+      const ni = particles[i].neighbors;
+      const len = ni.length;
+      if (len < 2) continue;
+
+      for (let a = 0; a < len - 1; a++) {
+        for (let b = a + 1; b < len; b++) {
+          const j = ni[a];
+          const k = ni[b];
+          if (j === k) continue;
+
+          const pj = particles[j];
+          const pk = particles[k];
+
+          const dx = pj.x - pk.x;
+          const dy = pj.y - pk.y;
+          const dist2 = dx * dx + dy * dy;
+          if (dist2 > LINK_DISTANCE2) continue;
+
+          // 面的 key：排序过的索引组合，避免重复
+          const indices = [i, j, k].sort((a, b) => a - b);
+          const key = indices.join("-");
+
+          let face = faces.get(key);
+          if (!face) {
+            face = {
+              i: indices[0],
+              j: indices[1],
+              k: indices[2],
+              alpha: 0,
+              baseAlpha:
+                FACE_ALPHA_MIN +
+                Math.random() * (FACE_ALPHA_MAX - FACE_ALPHA_MIN),
+              targetAlpha: 0,
+              activeThisFrame: true
+            };
+            faces.set(key, face);
+          } else {
+            face.activeThisFrame = true;
+          }
+        }
+      }
+    }
+
+    // ③ 面的淡入淡出
+    faces.forEach((face, key) => {
+      face.targetAlpha = face.activeThisFrame ? face.baseAlpha : 0;
+      face.alpha +=
+        (face.targetAlpha - face.alpha) * FACE_FADE_SPEED;
+
+      if (!face.activeThisFrame && face.alpha < 0.01) {
+        faces.delete(key);
+      }
+    });
+
+    return links;
+  }
+
+  function drawFaces() {
+    faces.forEach((face) => {
+      if (face.alpha <= 0.01) return;
+
+      const p1 = particles[face.i];
+      const p2 = particles[face.j];
+      const p3 = particles[face.k];
+
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.lineTo(p3.x, p3.y);
+      ctx.closePath();
+
+      // 面的颜色：偏青蓝，在深色背景上有一点“选中”感
+      ctx.fillStyle = `rgba(56, 189, 248, ${face.alpha})`;
+      ctx.fill();
+    });
+  }
+
+  // 画“星轨连线”
+  function drawConnections(links) {
+    for (const { i, j, alpha } of links) {
+      if (alpha <= 0.02) continue;
+      const p1 = particles[i];
+      const p2 = particles[j];
+
+      ctx.strokeStyle = `hsla(${(p1.hue + p2.hue) / 2}, 100%, 72%, ${alpha})`;
+      ctx.lineWidth = 0.7 * (0.4 + alpha);
+
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
     }
   }
 
@@ -179,7 +294,7 @@
     const dt = (timestamp - lastTime) * 0.06; // 统一控制所有速度
     lastTime = timestamp;
 
-    // 拖尾效果：不要把画布清得太干净，盖一层半透明遮罩
+    // 拖尾效果：盖一层半透明深色遮罩
     ctx.fillStyle = "rgba(2, 6, 23, 0.18)";
     ctx.fillRect(0, 0, width, height);
 
@@ -188,8 +303,12 @@
       p.update(dt, width, height, timestamp, mouse);
     }
 
-    // 先画星轨连线，再画星星，这样星星在上层更亮
-    drawConnections();
+    // 构建连线 + 面
+    const links = buildNetwork();
+
+    // 先画面，再画线，再画星星
+    drawFaces();
+    drawConnections(links);
 
     for (const p of particles) {
       p.draw(ctx);
