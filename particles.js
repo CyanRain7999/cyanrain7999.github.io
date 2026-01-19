@@ -24,7 +24,11 @@
   const FACE_ALPHA_MIN = 0.06;
   const FACE_ALPHA_MAX = 0.16;
 
-  let particles = [];
+  
+
+  // 粒子“重生冷却”：避免粒子从另一端重生时，连线/三角面横跨全屏
+  const SPAWN_COOLDOWN = 18; // 约等于 ~18 帧（dt 是本脚本的时间缩放单位）
+let particles = [];
   const faces = new Map(); // "i-j-k" -> { i,j,k,alpha,targetAlpha,baseAlpha,activeThisFrame }
 
   class Particle {
@@ -47,9 +51,16 @@
       this.hue = 190 + Math.random() * 40;
       this.alpha = 0.3 + Math.random() * 0.35;
       this.twinkleOffset = Math.random() * Math.PI * 2;
+    
+      this.spawnCooldown = SPAWN_COOLDOWN;
     }
 
     update(dt, w, h, t, mouse) {
+      if (this.spawnCooldown > 0) {
+        this.spawnCooldown -= dt;
+        if (this.spawnCooldown < 0) this.spawnCooldown = 0;
+      }
+
       this.x += this.dx * dt;
       this.y += this.speed * dt;
 
@@ -76,17 +87,26 @@
         }
       }
 
-      // 出界重生
+      // 出界重生（重生/穿屏后进入冷却，避免跨屏连线/大三角）
       if (this.y - this.radius > h + 20) {
-        this.reset(w, h, false);
+        this.reset(w, h, false); // reset 内会设置 spawnCooldown
       }
-      if (this.x < -20) this.x = w + 20;
-      if (this.x > w + 20) this.x = -20;
+      if (this.x < -20) {
+        this.x = w + 20;
+        this.spawnCooldown = SPAWN_COOLDOWN;
+      }
+      if (this.x > w + 20) {
+        this.x = -20;
+        this.spawnCooldown = SPAWN_COOLDOWN;
+      }
     }
 
     draw(ctx) {
       const glowRadius = this.radius * 3.1;
 
+
+      const appear = this.spawnCooldown > 0 ? Math.max(0, 1 - this.spawnCooldown / SPAWN_COOLDOWN) : 1;
+      const a = this.alpha * appear;
       const gradient = ctx.createRadialGradient(
         this.x,
         this.y,
@@ -97,7 +117,7 @@
       );
       gradient.addColorStop(
         0,
-        `hsla(${this.hue}, 100%, 75%, ${this.alpha})`
+        `hsla(${this.hue}, 100%, 75%, ${a})`
       );
       gradient.addColorStop(1, "rgba(15, 23, 42, 0)");
 
@@ -174,11 +194,18 @@
     // ① 计算连线和邻居
     for (let i = 0; i < n; i++) {
       const p1 = particles[i];
+      if (p1.spawnCooldown > 0) continue;
       for (let j = i + 1; j < n; j++) {
         const p2 = particles[j];
 
         const dx = p2.x - p1.x;
         const dy = p2.y - p1.y;
+
+        // 如果横向或纵向跨度本身就很大，直接不连线（再保险一层）
+        if (Math.abs(dx) > LINK_DISTANCE || Math.abs(dy) > LINK_DISTANCE) {
+          continue;
+        }
+
         const dist2 = dx * dx + dy * dy;
 
         if (dist2 < LINK_DISTANCE2) {
